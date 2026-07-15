@@ -19,3 +19,4 @@
 - 公开仓库会公开自选股列表、代码和网页。
 - 私人仓库能否使用 Pages 取决于 GitHub 套餐。
 - GitHub Actions共享IP也可能被Yahoo限流；失败时稍后在Actions页面重新运行。
+Test
