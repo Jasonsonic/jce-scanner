@@ -241,6 +241,171 @@ def score_volume(d: pd.DataFrame) -> tuple[float, float, float, str]:
     return min(10.0, score), float(ratio) if pd.notna(ratio) else np.nan, float(two_day_return), state
 
 
+
+
+def score_reversal_after_decline(d: pd.DataFrame) -> dict:
+    """
+    识别“较长下跌阶段后，最新交易日出现确认阳线”。
+
+    与V3.1不同：
+    - 下跌阶段可以持续较长时间；
+    - 中间允许最多2个“小幅上涨日”；
+    - 小幅上涨默认定义为单日收盘涨幅不超过3%；
+    - 一旦出现明显上涨、横盘过久或容忍次数耗尽，停止向前追溯。
+    """
+    if len(d) < 40:
+        return {
+            "reversal_score": 0.0,
+            "reversal_signal": False,
+            "decline_span_days": 0,
+            "decline_down_days": 0,
+            "ignored_small_up_days": 0,
+            "decline_pct": np.nan,
+            "bull_day_return_pct": np.nan,
+            "bull_body_pct": np.nan,
+            "bull_volume_ratio": np.nan,
+            "reversal_state": "数据不足",
+        }
+
+    latest = d.iloc[-1]
+    prev = d.iloc[-2]
+
+    latest_bullish = latest["Close"] > latest["Open"]
+    close_above_prev = latest["Close"] > prev["Close"]
+    bull_day_return_pct = (latest["Close"] / prev["Close"] - 1) * 100
+    bull_body_pct = (latest["Close"] / latest["Open"] - 1) * 100
+
+    max_lookback = 15
+    max_small_up_days = 4
+    small_up_limit_pct = 3.0
+    flat_limit_pct = 0.35
+
+    cursor = len(d) - 2
+    earliest_index = cursor
+    decline_down_days = 0
+    ignored_small_up_days = 0
+    flat_days = 0
+    span_days = 0
+
+    while cursor >= 1 and span_days < max_lookback:
+        today_close = float(d["Close"].iloc[cursor])
+        prior_close = float(d["Close"].iloc[cursor - 1])
+        day_return_pct = (today_close / prior_close - 1) * 100
+
+        if day_return_pct < -flat_limit_pct:
+            decline_down_days += 1
+        elif 0 < day_return_pct <= small_up_limit_pct and ignored_small_up_days < max_small_up_days:
+            ignored_small_up_days += 1
+        elif abs(day_return_pct) <= flat_limit_pct and flat_days < 3:
+            # 少量近似横盘日也允许存在，避免把缓慢下跌切断。
+            flat_days += 1
+        else:
+            break
+
+        earliest_index = cursor - 1
+        cursor -= 1
+        span_days += 1
+
+    if span_days > 0:
+        start_close = float(d["Close"].iloc[earliest_index])
+        end_close = float(d["Close"].iloc[-2])
+        decline_pct = (end_close / start_close - 1) * 100
+    else:
+        decline_pct = 0.0
+
+    baseline_volume = d["Volume"].iloc[-21:-1].mean()
+    bull_volume_ratio = float(latest["Volume"] / baseline_volume) if baseline_volume else np.nan
+
+    score = 0.0
+
+    # 下跌阶段持续时间：长周期不封顶，但20日以后得分不再继续增加。
+    if span_days >= 15:
+        score += 38
+    elif span_days >= 10:
+        score += 34
+    elif span_days >= 7:
+        score += 29
+    elif span_days >= 5:
+        score += 24
+    elif span_days >= 3:
+        score += 17
+
+    # 实际下跌日数量，防止大量横盘或小涨被误判为持续下跌。
+    if decline_down_days >= 10:
+        score += 12
+    elif decline_down_days >= 7:
+        score += 10
+    elif decline_down_days >= 5:
+        score += 7
+    elif decline_down_days >= 3:
+        score += 4
+
+    abs_decline = abs(decline_pct)
+    if 8 <= abs_decline <= 20:
+        score += 25
+    elif 20 < abs_decline <= 30:
+        score += 18
+    elif abs_decline > 30:
+        score += 9
+    else:
+        score += 0
+
+    if latest_bullish:
+        score += 8
+    if close_above_prev:
+        score += 8
+    if latest["Close"] >= (prev["High"] + prev["Low"]) / 2:
+        score += 4
+
+    if pd.notna(bull_volume_ratio):
+        if bull_volume_ratio >= 1.5:
+            score += 5
+        elif bull_volume_ratio >= 1.2:
+            score += 4
+        elif bull_volume_ratio >= 0.9:
+            score += 2
+
+    if 0.3 <= bull_day_return_pct <= 6:
+        score += 4
+    elif 6 < bull_day_return_pct <= 10:
+        score += 1
+    elif bull_day_return_pct > 10:
+        score = min(score, 79)
+
+    # 核心条件：阶段内至少3个真正下跌日，整体净跌至少8%，最新为确认阳线。
+    reversal_signal = bool(
+        span_days >= 3
+        and decline_down_days >= 3
+        and decline_pct <= -8
+        and latest_bullish
+        and close_above_prev
+        and bull_day_return_pct <= 10
+    )
+
+    if reversal_signal and score >= 85:
+        state = "A-长跌阶段后强确认阳线"
+    elif reversal_signal and score >= 70:
+        state = "B-下跌阶段后出现确认阳线"
+    elif latest_bullish and decline_down_days >= 3:
+        state = "C-初步止跌，确认不足"
+    elif decline_down_days >= 3:
+        state = "观察-仍处下跌阶段"
+    else:
+        state = "无反转信号"
+
+    return {
+        "reversal_score": round(min(100.0, score), 1),
+        "reversal_signal": reversal_signal,
+        "decline_span_days": span_days,
+        "decline_down_days": decline_down_days,
+        "ignored_small_up_days": ignored_small_up_days,
+        "decline_pct": float(decline_pct),
+        "bull_day_return_pct": float(bull_day_return_pct),
+        "bull_body_pct": float(bull_body_pct),
+        "bull_volume_ratio": bull_volume_ratio,
+        "reversal_state": state,
+    }
+
 def score_one(df: pd.DataFrame, cfg: JCEConfig) -> dict:
     if len(df) < cfg.min_rows:
         raise ValueError(f"数据不足，仅 {len(df)} 行")
@@ -270,6 +435,7 @@ def score_one(df: pd.DataFrame, cfg: JCEConfig) -> dict:
 
     stability_score, four_day_range_pct, four_day_return_pct = score_stability(d)
     volume_score, two_day_volume_ratio, two_day_return_pct, volume_state = score_volume(d)
+    reversal = score_reversal_after_decline(d)
 
     raw_score = compression_score + entry_score + position_score + stability_score + volume_score
     total_score = raw_score if short_mas_above_ma60 else min(raw_score, 69.0)
@@ -298,8 +464,20 @@ def score_one(df: pd.DataFrame, cfg: JCEConfig) -> dict:
     else:
         entry_state = "距离MA60一般"
 
+    reversal_score = float(reversal["reversal_score"])
+    priority_score = max(float(total_score), reversal_score)
+    if reversal_score > total_score and reversal["reversal_signal"]:
+        primary_signal = "连续下跌后首阳"
+        final_recommendation = reversal["reversal_state"]
+    else:
+        primary_signal = "均线压缩贴近MA60"
+        final_recommendation = recommendation
+
     return {
         "date": d.index[-1].date().isoformat(),
+        "priority_score": round(priority_score, 1),
+        "primary_signal": primary_signal,
+        "final_recommendation": final_recommendation,
         "jce_entry_score": round(total_score, 1),
         "recommendation": recommendation,
         "entry_state": entry_state,
@@ -319,6 +497,16 @@ def score_one(df: pd.DataFrame, cfg: JCEConfig) -> dict:
         "two_day_volume_ratio": two_day_volume_ratio,
         "two_day_return_pct": two_day_return_pct,
         "volume_state": volume_state,
+        "reversal_score": reversal["reversal_score"],
+        "reversal_signal": reversal["reversal_signal"],
+        "reversal_state": reversal["reversal_state"],
+        "decline_span_days": reversal["decline_span_days"],
+        "decline_down_days": reversal["decline_down_days"],
+        "ignored_small_up_days": reversal["ignored_small_up_days"],
+        "decline_pct": reversal["decline_pct"],
+        "bull_day_return_pct": reversal["bull_day_return_pct"],
+        "bull_body_pct": reversal["bull_body_pct"],
+        "bull_volume_ratio": reversal["bull_volume_ratio"],
         "close": close,
         "ma5": ma5,
         "ma8": ma8,
@@ -329,9 +517,9 @@ def score_one(df: pd.DataFrame, cfg: JCEConfig) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="JCE Scanner V3：最新交易日建仓评分")
+    parser = argparse.ArgumentParser(description="JCE Scanner V3.3：15日下跌窗口 + 最多4次小涨容忍")
     parser.add_argument("--watchlist", default="config/watchlist.csv")
-    parser.add_argument("--output", default="output/jce_scan_v3.xlsx")
+    parser.add_argument("--output", default="output/jce_scan_v3_3.xlsx")
     parser.add_argument("--period", default="1y")
     parser.add_argument("--top", type=int, default=30)
     parser.add_argument("--refresh", action="store_true")
@@ -367,9 +555,9 @@ def main() -> int:
         print("没有得到可分析结果。", file=sys.stderr)
         return 2
 
-    result = pd.DataFrame(rows).sort_values(["jce_entry_score", "four_line_width_pct", "close_to_ma60_pct"], ascending=[False, True, True])
-    candidates = result[result["recommendation"].str.startswith(("A-", "B-", "C-"))]
-    top_candidates = result[result["recommendation"].str.startswith(("A-", "B-"))]
+    result = pd.DataFrame(rows).sort_values(["priority_score", "reversal_score", "jce_entry_score", "four_line_width_pct"], ascending=[False, False, False, True])
+    candidates = result[(result["recommendation"].str.startswith(("A-", "B-", "C-"))) | (result["reversal_signal"])]
+    top_candidates = result[(result["recommendation"].str.startswith(("A-", "B-"))) | (result["reversal_score"] >= 70)]
 
     output_path = root / args.output
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -382,8 +570,8 @@ def main() -> int:
     csv_path = output_path.with_suffix(".csv")
     result.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
-    show = ["symbol", "jce_entry_score", "recommendation", "entry_state", "short_mas_above_ma60", "four_line_width_pct", "close_to_ma60_pct", "half_year_position_pct", "two_day_volume_ratio", "volume_state"]
-    print("\nJCE V3 最新交易日排行榜：")
+    show = ["symbol", "priority_score", "primary_signal", "final_recommendation", "jce_entry_score", "reversal_score", "decline_span_days", "decline_down_days", "ignored_small_up_days", "decline_pct", "bull_day_return_pct", "four_line_width_pct", "close_to_ma60_pct"]
+    print("\nJCE V3.3 最新交易日排行榜：")
     print(result[show].head(args.top).to_string(index=False))
     print(f"\nExcel：{output_path}")
     print(f"CSV：{csv_path}")
