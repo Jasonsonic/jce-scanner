@@ -406,6 +406,24 @@ def score_reversal_after_decline(d: pd.DataFrame) -> dict:
         "reversal_state": state,
     }
 
+
+def score_three_month_low(distance_pct: float) -> tuple[float, str]:
+    """
+    当前收盘价相对过去约3个月（63个交易日）最低价的位置加分。
+
+    distance_pct = (当前收盘价 / 3个月最低价 - 1) * 100
+    """
+    if distance_pct <= 3:
+        return 10.0, "★★★★★ 极接近三个月低点"
+    if distance_pct <= 7:
+        return 8.0, "★★★★☆ 接近三个月低点"
+    if distance_pct <= 10:
+        return 6.0, "★★★☆☆ 处于三个月低位"
+    if distance_pct <= 15:
+        return 3.0, "★★☆☆☆ 略高于三个月低点"
+    return 0.0, "★☆☆☆☆ 距三个月低点较远"
+
+
 def score_one(df: pd.DataFrame, cfg: JCEConfig) -> dict:
     if len(df) < cfg.min_rows:
         raise ValueError(f"数据不足，仅 {len(df)} 行")
@@ -433,12 +451,22 @@ def score_one(df: pd.DataFrame, cfg: JCEConfig) -> dict:
     half_position = (close - half_low) / (half_high - half_low) if half_high > half_low else np.nan
     position_score, position_stars = score_half_year_position(float(half_position))
 
+    three_month = d.iloc[-63:]
+    three_month_low = float(three_month["Low"].min())
+    three_month_low_distance_pct = (
+        (close / three_month_low - 1) * 100 if three_month_low > 0 else np.nan
+    )
+    three_month_low_bonus, three_month_low_state = score_three_month_low(
+        float(three_month_low_distance_pct)
+    )
+
     stability_score, four_day_range_pct, four_day_return_pct = score_stability(d)
     volume_score, two_day_volume_ratio, two_day_return_pct, volume_state = score_volume(d)
     reversal = score_reversal_after_decline(d)
 
     raw_score = compression_score + entry_score + position_score + stability_score + volume_score
-    total_score = raw_score if short_mas_above_ma60 else min(raw_score, 69.0)
+    base_total_score = raw_score if short_mas_above_ma60 else min(raw_score, 69.0)
+    total_score = min(100.0, base_total_score + three_month_low_bonus)
 
     if short_mas_above_ma60 and total_score >= 90:
         recommendation = "A-明日重点考虑"
@@ -464,7 +492,8 @@ def score_one(df: pd.DataFrame, cfg: JCEConfig) -> dict:
     else:
         entry_state = "距离MA60一般"
 
-    reversal_score = float(reversal["reversal_score"])
+    reversal_base_score = float(reversal["reversal_score"])
+    reversal_score = min(100.0, reversal_base_score + three_month_low_bonus)
     priority_score = max(float(total_score), reversal_score)
     if reversal_score > total_score and reversal["reversal_signal"]:
         primary_signal = "连续下跌后首阳"
@@ -492,12 +521,17 @@ def score_one(df: pd.DataFrame, cfg: JCEConfig) -> dict:
         "close_to_ma60_pct": close_to_ma60_pct,
         "half_year_position_pct": half_position * 100,
         "half_year_position_stars": position_stars,
+        "three_month_low": three_month_low,
+        "three_month_low_distance_pct": three_month_low_distance_pct,
+        "three_month_low_bonus_10": three_month_low_bonus,
+        "three_month_low_state": three_month_low_state,
         "four_day_range_pct": four_day_range_pct,
         "four_day_return_pct": four_day_return_pct,
         "two_day_volume_ratio": two_day_volume_ratio,
         "two_day_return_pct": two_day_return_pct,
         "volume_state": volume_state,
-        "reversal_score": reversal["reversal_score"],
+        "reversal_base_score": reversal_base_score,
+        "reversal_score": reversal_score,
         "reversal_signal": reversal["reversal_signal"],
         "reversal_state": reversal["reversal_state"],
         "decline_span_days": reversal["decline_span_days"],
@@ -517,9 +551,9 @@ def score_one(df: pd.DataFrame, cfg: JCEConfig) -> dict:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="JCE Scanner V3.3：15日下跌窗口 + 最多4次小涨容忍")
+    parser = argparse.ArgumentParser(description="JCE Scanner V3.4：加入三个月低点加分")
     parser.add_argument("--watchlist", default="config/watchlist.csv")
-    parser.add_argument("--output", default="output/jce_scan_v3_3.xlsx")
+    parser.add_argument("--output", default="output/jce_scan_v3_4.xlsx")
     parser.add_argument("--period", default="1y")
     parser.add_argument("--top", type=int, default=30)
     parser.add_argument("--refresh", action="store_true")
@@ -570,8 +604,8 @@ def main() -> int:
     csv_path = output_path.with_suffix(".csv")
     result.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
-    show = ["symbol", "priority_score", "primary_signal", "final_recommendation", "jce_entry_score", "reversal_score", "decline_span_days", "decline_down_days", "ignored_small_up_days", "decline_pct", "bull_day_return_pct", "four_line_width_pct", "close_to_ma60_pct"]
-    print("\nJCE V3.3 最新交易日排行榜：")
+    show = ["symbol", "priority_score", "primary_signal", "final_recommendation", "jce_entry_score", "reversal_score", "decline_span_days", "decline_down_days", "ignored_small_up_days", "decline_pct", "bull_day_return_pct", "three_month_low_distance_pct", "three_month_low_bonus_10", "four_line_width_pct", "close_to_ma60_pct"]
+    print("\nJCE V3.4 最新交易日排行榜：")
     print(result[show].head(args.top).to_string(index=False))
     print(f"\nExcel：{output_path}")
     print(f"CSV：{csv_path}")
