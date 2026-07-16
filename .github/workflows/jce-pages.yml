@@ -1,4 +1,4 @@
-name: JCE Daily Scan
+name: JCE Professional Daily Scan
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "jce-pages"
+  group: jce-pages
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
+          cache: pip
 
       - name: Restore market-data cache
         uses: actions/cache@v4

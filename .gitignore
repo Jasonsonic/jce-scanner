@@ -1,6 +1,6 @@
 .venv/
 __pycache__/
+data_cache/
 output/
 site/
-data_cache/
 *.pyc
