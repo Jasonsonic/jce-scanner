@@ -1,31 +1,24 @@
-# JCE Scanner GitHub Pages 最新版
+# JCE Scanner V3 — 最新交易日建仓版
 
-## 部署
+## 核心逻辑
 
-1. 将本文件夹内全部文件提交并推送到 GitHub 仓库 `main` 分支。
-2. 确认存在：
-   `.github/workflows/jce-pages.yml`
-3. 在 GitHub 仓库进入：
-   `Settings → Pages`
-4. 将 Source 设置为：
-   `GitHub Actions`
-5. 进入：
-   `Actions → JCE Daily Scan → Run workflow`
-6. 首次运行成功后，在 `Settings → Pages` 查看网页地址。
+- 只分析最新交易日，用于下一交易日开盘前筛选。
+- MA5、MA8、MA13之间不要求任何排列顺序。
+- 三条短期均线最好全部位于MA60上方。
+- 四条均线越接近，得分越高。
+- 最新收盘价越接近MA60，得分越高。
+- 均线是否高于昨天、均线斜率，不参与核心评分。
 
-## 自动运行时间
+## 总分100
 
-默认每个工作日 22:30 UTC 运行，对应新加坡时间次日 06:30。
+- 四线压缩：40分
+- 最新收盘价贴近MA60：30分
+- 半年价格位置：10分
+- 最近4日稳定性：10分
+- 最近2日成交量：10分
 
-## 本版内容
+如果MA5、MA8、MA13没有全部位于MA60上方，总分最高限制为69分。
 
-- JCE V2 五维评分
-- Yahoo Finance限流缓解
-- 本地及GitHub Actions缓存
-- 自动生成HTML排行榜
-- 网页下载Excel与CSV
-- 145只股票自选列表
+## 更新GitHub
 
-## 注意
-
-GitHub Actions共享出口IP仍可能被Yahoo限流。失败时可稍后在Actions中重新运行。
+把本包内容覆盖到SourceTree本地仓库，暂存全部、Commit、Push。GitHub Actions会自动运行，网页更新为V3。
